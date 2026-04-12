@@ -1,0 +1,12 @@
+loki:
+  auth_enabled: false
+
+singleBinary:
+  replicas: 1
+  persistence:
+    enabled: true
+    size: 20Gi
+
+monitoring:
+  serviceMonitor:
+    enabled: true
