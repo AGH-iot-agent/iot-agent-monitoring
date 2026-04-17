@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, feat/iot-agent-monitoring ]
+  pull_request:
+    branches: [ main, feat/iot-agent-monitoring ]
+  workflow_dispatch:
+
+concurrency:
+  group: iot-agent-monitoring-${{ github.event_name == 'pull_request' && 'sbx' || 'dev' }}
+  cancel-in-progress: false
+
+jobs:
+  deploy-monitoring:
+    runs-on: [self-hosted, iot-agent-local]
+    env:
+      KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      MONITORING_NAMESPACE: iotag-monitoring
+      ENVIRONMENT: ${{ github.event_name == 'pull_request' && 'sbx' || 'dev' }}
+      KPS_VALUES: ${{ github.event_name == 'pull_request' && 'Helm/kube-prometheus-stack-sbx.yaml' || 'Helm/kube-prometheus-stack-dev.yaml' }}
+      LOKI_VALUES: ${{ github.event_name == 'pull_request' && 'Helm/loki-sbx.yaml' || 'Helm/loki-dev.yaml' }}
+      PROMTAIL_VALUES: ${{ github.event_name == 'pull_request' && 'Helm/promtail-sbx.yaml' || 'Helm/promtail-dev.yaml' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Verify runner prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          [[ -f "$KUBECONFIG" ]] || { echo "ERROR: Missing kubeconfig at $KUBECONFIG"; exit 1; }
+          [[ -f "$KPS_VALUES" ]] || { echo "ERROR: Missing values file $KPS_VALUES"; exit 1; }
+          [[ -f "$LOKI_VALUES" ]] || { echo "ERROR: Missing values file $LOKI_VALUES"; exit 1; }
+          [[ -f "$PROMTAIL_VALUES" ]] || { echo "ERROR: Missing values file $PROMTAIL_VALUES"; exit 1; }
+
+          kubectl version --client
+          helm version
+
+      - name: Add Helm repositories
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null 2>&1 || true
+          helm repo add grafana https://grafana.github.io/helm-charts >/dev/null 2>&1 || true
+          helm repo update >/dev/null
+
+      - name: Deploy kube-prometheus-stack
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          helm upgrade --install iot-agent-monitoring prometheus-community/kube-prometheus-stack \
+            --namespace "$MONITORING_NAMESPACE" \
+            --create-namespace \
+            -f "$KPS_VALUES" \
+            --wait --timeout 20m
+
+      - name: Deploy Loki
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          helm upgrade --install iot-agent-loki grafana/loki \
+            --namespace "$MONITORING_NAMESPACE" \
+            -f "$LOKI_VALUES" \
+            --wait --timeout 20m
+
+      - name: Deploy Promtail
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          helm upgrade --install iot-agent-promtail grafana/promtail \
+            --namespace "$MONITORING_NAMESPACE" \
+            -f "$PROMTAIL_VALUES" \
+            --wait --timeout 20m
+
+      - name: Apply ServiceMonitors
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          kubectl apply -f k8s/servicemonitors/iot-platform-dev.yaml
+          kubectl apply -f k8s/servicemonitors/iot-platform-sbx.yaml
+
+      - name: Verify deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          kubectl -n "$MONITORING_NAMESPACE" get pods
+          kubectl -n "$MONITORING_NAMESPACE" get servicemonitors
+          echo "Monitoring deployed with profile: $ENVIRONMENT"
