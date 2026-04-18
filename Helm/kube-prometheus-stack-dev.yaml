@@ -18,22 +18,48 @@ prometheusOperator:
     repository: prometheus-operator/prometheus-operator
     tag: v0.82.0
     pullPolicy: IfNotPresent
+  admissionWebhooks:
+    enabled: false
   prometheusConfigReloader:
     image:
       registry: quay.io
       repository: prometheus-operator/prometheus-config-reloader
       tag: v0.82.0
+      pullPolicy: IfNotPresent
 
 grafana:
   image:
     repository: iot-agent-grafana
     tag: latest
     pullPolicy: Never
+  deploymentStrategy:
+    type: Recreate
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  readinessProbe:
+    initialDelaySeconds: 60
+    timeoutSeconds: 10
+    periodSeconds: 30
+  livenessProbe:
+    initialDelaySeconds: 120
+    timeoutSeconds: 10
+    periodSeconds: 30
   sidecar:
     image:
       registry: quay.io
       repository: kiwigrid/k8s-sidecar
       tag: 1.30.3
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        memory: 128Mi
   adminPassword: admin
   service:
     type: ClusterIP
@@ -55,6 +81,13 @@ prometheus:
       registry: quay.io
       repository: prometheus/prometheus
       tag: v3.2.1
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 50m
+        memory: 256Mi
+      limits:
+        memory: 1Gi
     retention: 7d
     serviceMonitorSelectorNilUsesHelmValues: false
     serviceMonitorNamespaceSelector: {}
@@ -71,6 +104,13 @@ alertmanager:
       registry: quay.io
       repository: prometheus/alertmanager
       tag: v0.28.1
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        memory: 256Mi
     storage:
       volumeClaimTemplate:
         spec:

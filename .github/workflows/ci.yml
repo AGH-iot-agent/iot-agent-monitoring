@@ -201,7 +201,7 @@ jobs:
             --create-namespace \
             -f "$KPS_VALUES" \
             --set grafana.image.tag="$IMAGE_TAG" \
-            --wait --timeout 10m
+            --wait --timeout 20m
 
       - name: Deploy Loki
         run: |
@@ -212,7 +212,7 @@ jobs:
           helm upgrade --install iot-agent-loki "$LOKI_CHART" \
             --namespace "$MONITORING_NAMESPACE" \
             -f "$LOKI_VALUES" \
-            --wait --timeout 10m
+            --wait --timeout 20m
 
       - name: Deploy Promtail
         run: |
@@ -223,7 +223,7 @@ jobs:
           helm upgrade --install iot-agent-promtail "$PROMTAIL_CHART" \
             --namespace "$MONITORING_NAMESPACE" \
             -f "$PROMTAIL_VALUES" \
-            --wait --timeout 10m
+            --wait --timeout 20m
 
       - name: Apply ServiceMonitors
         run: |
