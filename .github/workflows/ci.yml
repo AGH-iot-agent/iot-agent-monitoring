@@ -64,11 +64,27 @@ jobs:
       - name: Pre-pull monitoring images into k3s
         run: |
           set -euo pipefail
+          CACHE_DIR="$IMAGE_OUTPUT_DIR/monitoring-cache"
+          mkdir -p "$CACHE_DIR"
+
+          K3S_SOCK="/run/k3s/containerd/containerd.sock"
           SUDO=""
           command -v sudo >/dev/null && SUDO="sudo"
-          K3S_SOCK="/run/k3s/containerd/containerd.sock"
 
-          # Core images used by kube-prometheus-stack, Loki, Promtail
+          import_to_k3s() {
+            local archive="$1"
+            if command -v k3s >/dev/null; then
+              $SUDO "$(command -v k3s)" ctr images import "$archive"
+            elif command -v ctr >/dev/null; then
+              $SUDO "$(command -v ctr)" --address "$K3S_SOCK" -n k8s.io images import "$archive"
+            elif [[ -x /usr/local/bin/k3s ]]; then
+              $SUDO /usr/local/bin/k3s ctr images import "$archive"
+            else
+              echo "ERROR: Neither k3s nor ctr found"; exit 1
+            fi
+          }
+
+          # All images required by kube-prometheus-stack + Loki + Promtail
           IMAGES=(
             "quay.io/prometheus/prometheus:v3.2.1"
             "quay.io/prometheus/alertmanager:v0.28.1"
@@ -77,33 +93,24 @@ jobs:
             "quay.io/kiwigrid/k8s-sidecar:1.30.3"
             "quay.io/prometheus/node-exporter:v1.9.0"
             "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.15.0"
+            "docker.io/grafana/loki:3.4.2"
+            "docker.io/grafana/promtail:3.4.2"
           )
 
-          import_image() {
-            local img="$1"
-            local name; name="$(echo "$img" | tr '/:' '__')"
-            local archive="$IMAGE_OUTPUT_DIR/monitoring-cache/${name}.tar"
+          for img in "${IMAGES[@]}"; do
+            ARCHIVE="${CACHE_DIR}/$(echo "$img" | tr '/:' '__').tar"
 
-            # Skip if already present in k3s containerd
-            if $SUDO ctr --address "$K3S_SOCK" -n k8s.io images check "name==$img" 2>/dev/null | grep -q "$img"; then
-              echo "Already in k3s: $img"
-              return 0
-            fi
-
-            mkdir -p "$IMAGE_OUTPUT_DIR/monitoring-cache"
-            if [[ ! -f "$archive" ]]; then
+            if [[ -f "$ARCHIVE" ]]; then
+              echo "Cached: $img"
+            else
               echo "Pulling $img ..."
               docker pull "$img"
-              docker save -o "$archive" "$img"
+              docker save -o "$ARCHIVE" "$img"
             fi
-            echo "Importing $img into k3s ..."
-            $SUDO ctr --address "$K3S_SOCK" -n k8s.io images import "$archive"
-          }
 
-          for img in "${IMAGES[@]}"; do
-            import_image "$img" &
+            echo "Importing $img ..."
+            import_to_k3s "$ARCHIVE"
           done
-          wait
           echo "All monitoring images cached and imported"
 
   deploy-monitoring:

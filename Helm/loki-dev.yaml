@@ -1,6 +1,11 @@
 deploymentMode: SingleBinary
 
 loki:
+  image:
+    registry: docker.io
+    repository: grafana/loki
+    tag: 3.4.2
+    pullPolicy: IfNotPresent
   auth_enabled: false
   commonConfig:
     replication_factor: 1

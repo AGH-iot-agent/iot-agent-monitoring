@@ -8,11 +8,32 @@ kubeControllerManager:
 kubeProxy:
   enabled: false
 
+# -- All images pre-pulled into k3s containerd; never pull from internet
+global:
+  imageRegistry: ""
+
+prometheusOperator:
+  image:
+    registry: quay.io
+    repository: prometheus-operator/prometheus-operator
+    tag: v0.82.0
+    pullPolicy: IfNotPresent
+  prometheusConfigReloader:
+    image:
+      registry: quay.io
+      repository: prometheus-operator/prometheus-config-reloader
+      tag: v0.82.0
+
 grafana:
   image:
     repository: iot-agent-grafana
     tag: latest
     pullPolicy: Never
+  sidecar:
+    image:
+      registry: quay.io
+      repository: kiwigrid/k8s-sidecar
+      tag: 1.30.3
   adminPassword: admin
   service:
     type: ClusterIP
@@ -30,6 +51,10 @@ grafana:
 
 prometheus:
   prometheusSpec:
+    image:
+      registry: quay.io
+      repository: prometheus/prometheus
+      tag: v3.2.1
     retention: 14d
     serviceMonitorSelectorNilUsesHelmValues: false
     serviceMonitorNamespaceSelector: {}
@@ -42,9 +67,27 @@ prometheus:
 
 alertmanager:
   alertmanagerSpec:
+    image:
+      registry: quay.io
+      repository: prometheus/alertmanager
+      tag: v0.28.1
     storage:
       volumeClaimTemplate:
         spec:
           resources:
             requests:
               storage: 5Gi
+
+prometheus-node-exporter:
+  image:
+    registry: quay.io
+    repository: prometheus/node-exporter
+    tag: v1.9.0
+    pullPolicy: IfNotPresent
+
+kube-state-metrics:
+  image:
+    registry: registry.k8s.io
+    repository: kube-state-metrics/kube-state-metrics
+    tag: v2.15.0
+    pullPolicy: IfNotPresent
