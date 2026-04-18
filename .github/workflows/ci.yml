@@ -165,6 +165,31 @@ jobs:
 
           echo "CHART_CACHE=$CHART_CACHE" >> "$GITHUB_ENV"
 
+      - name: Recover stuck Helm releases
+        run: |
+          set -euo pipefail
+          for release in iot-agent-monitoring iot-agent-loki iot-agent-promtail; do
+            STATUS="$(helm status "$release" -n "$MONITORING_NAMESPACE" -o json 2>/dev/null | jq -r '.info.status' || echo "not-found")"
+            case "$STATUS" in
+              pending-install|pending-upgrade|pending-rollback)
+                echo "Release $release stuck in $STATUS — rolling back ..."
+                LAST_GOOD="$(helm history "$release" -n "$MONITORING_NAMESPACE" -o json | jq '[.[] | select(.status == "deployed")] | last | .revision // empty')"
+                if [[ -n "$LAST_GOOD" ]]; then
+                  helm rollback "$release" "$LAST_GOOD" -n "$MONITORING_NAMESPACE" --wait --timeout 5m
+                else
+                  echo "No deployed revision found — uninstalling $release"
+                  helm uninstall "$release" -n "$MONITORING_NAMESPACE" --wait || true
+                fi
+                ;;
+              not-found|deployed|uninstalled)
+                echo "Release $release: $STATUS (OK)"
+                ;;
+              failed)
+                echo "Release $release in failed state — will be overwritten by upgrade"
+                ;;
+            esac
+          done
+
       - name: Deploy kube-prometheus-stack (with custom Grafana image)
         run: |
           set -euo pipefail
