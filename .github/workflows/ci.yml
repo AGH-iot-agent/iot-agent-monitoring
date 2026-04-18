@@ -49,8 +49,16 @@ jobs:
           command -v sudo >/dev/null && SUDO="sudo"
 
           K3S_SOCK="/run/k3s/containerd/containerd.sock"
-          [[ -S "$K3S_SOCK" ]] || { echo "ERROR: k3s containerd socket not found"; exit 1; }
-          $SUDO k3s ctr images import "$ARCHIVE"
+          [[ -S "$K3S_SOCK" ]] || { echo "ERROR: k3s containerd socket not found — mount /run/k3s from the k3s host"; exit 1; }
+
+          if command -v ctr >/dev/null 2>&1; then
+            $SUDO "$(command -v ctr)" --address "$K3S_SOCK" -n k8s.io images import "$ARCHIVE"
+          elif command -v k3s >/dev/null 2>&1; then
+            $SUDO "$(command -v k3s)" ctr images import "$ARCHIVE"
+          else
+            echo "ERROR: Neither ctr nor k3s found in PATH"
+            exit 1
+          fi
           echo "Imported $IMAGE into k3s"
 
   deploy-monitoring:
