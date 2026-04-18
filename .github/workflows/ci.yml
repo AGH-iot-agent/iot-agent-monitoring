@@ -2,25 +2,64 @@ name: CI
 
 on:
   push:
-    branches: [ main, feat/iot-agent-monitoring ]
+    branches: [main, feat/iot-agent-monitoring]
   pull_request:
-    branches: [ main, feat/iot-agent-monitoring ]
+    branches: [main, feat/iot-agent-monitoring]
   workflow_dispatch:
 
 concurrency:
   group: iot-agent-monitoring-${{ github.event_name == 'pull_request' && 'sbx' || 'dev' }}
   cancel-in-progress: false
 
+env:
+  KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  IMAGE_OUTPUT_DIR: /mnt/storage/iot-agent/docker-local
+
 jobs:
+  build-grafana:
+    runs-on: [self-hosted, iot-agent-local]
+    outputs:
+      image_tag: ${{ steps.tag.outputs.value }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve image tag
+        id: tag
+        run: echo "value=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Grafana image
+        run: |
+          set -euo pipefail
+          IMAGE="iot-agent-grafana:${{ steps.tag.outputs.value }}"
+          docker build -f Dockerfile -t "$IMAGE" .
+          # also tag as latest for convenience
+          docker tag "$IMAGE" iot-agent-grafana:latest
+
+      - name: Save & import to k3s
+        run: |
+          set -euo pipefail
+          IMAGE="iot-agent-grafana:${{ steps.tag.outputs.value }}"
+          ARCHIVE_DIR="$IMAGE_OUTPUT_DIR/iot-agent-grafana"
+          mkdir -p "$ARCHIVE_DIR"
+          ARCHIVE="$ARCHIVE_DIR/iot-agent-grafana__${{ steps.tag.outputs.value }}.tar"
+          docker save -o "$ARCHIVE" "$IMAGE" iot-agent-grafana:latest
+
+          K3S_SOCK="/run/k3s/containerd/containerd.sock"
+          [[ -S "$K3S_SOCK" ]] || { echo "ERROR: k3s containerd socket not found"; exit 1; }
+          sudo k3s ctr images import "$ARCHIVE"
+          echo "Imported $IMAGE into k3s"
+
   deploy-monitoring:
     runs-on: [self-hosted, iot-agent-local]
+    needs: build-grafana
     env:
-      KUBECONFIG: /etc/rancher/k3s/k3s.yaml
       MONITORING_NAMESPACE: iotag-monitoring
-      ENVIRONMENT: ${{ github.event_name == 'pull_request' && 'sbx' || 'dev' }}
-      KPS_VALUES: ${{ github.event_name == 'pull_request' && 'Helm/kube-prometheus-stack-sbx.yaml' || 'Helm/kube-prometheus-stack-dev.yaml' }}
-      LOKI_VALUES: ${{ github.event_name == 'pull_request' && 'Helm/loki-sbx.yaml' || 'Helm/loki-dev.yaml' }}
-      PROMTAIL_VALUES: ${{ github.event_name == 'pull_request' && 'Helm/promtail-sbx.yaml' || 'Helm/promtail-dev.yaml' }}
+      ENVIRONMENT:      ${{ github.event_name == 'pull_request' && 'sbx' || 'dev' }}
+      KPS_VALUES:       ${{ github.event_name == 'pull_request' && 'Helm/kube-prometheus-stack-sbx.yaml' || 'Helm/kube-prometheus-stack-dev.yaml' }}
+      LOKI_VALUES:      ${{ github.event_name == 'pull_request' && 'Helm/loki-sbx.yaml' || 'Helm/loki-dev.yaml' }}
+      PROMTAIL_VALUES:  ${{ github.event_name == 'pull_request' && 'Helm/promtail-sbx.yaml' || 'Helm/promtail-dev.yaml' }}
+      IMAGE_TAG:        ${{ needs.build-grafana.outputs.image_tag }}
 
     steps:
       - name: Checkout
@@ -33,71 +72,53 @@ jobs:
         uses: azure/setup-kubectl@v4
 
       - name: Verify runner prerequisites
-        shell: bash
         run: |
           set -euo pipefail
-
-          [[ -f "$KUBECONFIG" ]] || { echo "ERROR: Missing kubeconfig at $KUBECONFIG"; exit 1; }
-          [[ -f "$KPS_VALUES" ]] || { echo "ERROR: Missing values file $KPS_VALUES"; exit 1; }
-          [[ -f "$LOKI_VALUES" ]] || { echo "ERROR: Missing values file $LOKI_VALUES"; exit 1; }
-          [[ -f "$PROMTAIL_VALUES" ]] || { echo "ERROR: Missing values file $PROMTAIL_VALUES"; exit 1; }
-
-          kubectl version --client
-          helm version
+          [[ -f "$KUBECONFIG" ]]       || { echo "ERROR: Missing kubeconfig at $KUBECONFIG"; exit 1; }
+          [[ -f "$KPS_VALUES" ]]       || { echo "ERROR: Missing values file $KPS_VALUES"; exit 1; }
+          [[ -f "$LOKI_VALUES" ]]      || { echo "ERROR: Missing values file $LOKI_VALUES"; exit 1; }
+          [[ -f "$PROMTAIL_VALUES" ]]  || { echo "ERROR: Missing values file $PROMTAIL_VALUES"; exit 1; }
+          kubectl version --client && helm version
 
       - name: Add Helm repositories
-        shell: bash
         run: |
-          set -euo pipefail
-
           helm repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null 2>&1 || true
           helm repo add grafana https://grafana.github.io/helm-charts >/dev/null 2>&1 || true
           helm repo update >/dev/null
 
-      - name: Deploy kube-prometheus-stack
-        shell: bash
+      - name: Deploy kube-prometheus-stack (with custom Grafana image)
         run: |
           set -euo pipefail
-
           helm upgrade --install iot-agent-monitoring prometheus-community/kube-prometheus-stack \
             --namespace "$MONITORING_NAMESPACE" \
             --create-namespace \
             -f "$KPS_VALUES" \
+            --set grafana.image.tag="$IMAGE_TAG" \
             --wait --timeout 20m
 
       - name: Deploy Loki
-        shell: bash
         run: |
-          set -euo pipefail
-
           helm upgrade --install iot-agent-loki grafana/loki \
             --namespace "$MONITORING_NAMESPACE" \
             -f "$LOKI_VALUES" \
             --wait --timeout 20m
 
       - name: Deploy Promtail
-        shell: bash
         run: |
-          set -euo pipefail
-
           helm upgrade --install iot-agent-promtail grafana/promtail \
             --namespace "$MONITORING_NAMESPACE" \
             -f "$PROMTAIL_VALUES" \
             --wait --timeout 20m
 
       - name: Apply ServiceMonitors
-        shell: bash
         run: |
           set -euo pipefail
-
-          kubectl apply -f k8s/servicemonitors/iot-platform-dev.yaml
-          kubectl apply -f k8s/servicemonitors/iot-platform-sbx.yaml
+          SM_FILE="k8s/servicemonitors/iot-platform-${ENVIRONMENT}.yaml"
+          [[ -f "$SM_FILE" ]] && kubectl apply -f "$SM_FILE" || echo "WARN: $SM_FILE not found, skipping"
 
       - name: Verify deployment
-        shell: bash
+        if: always()
         run: |
-          set -euo pipefail
-
           kubectl -n "$MONITORING_NAMESPACE" get pods
-          kubectl -n "$MONITORING_NAMESPACE" get servicemonitors
-          echo "Monitoring deployed with profile: $ENVIRONMENT"
+          kubectl -n "$MONITORING_NAMESPACE" get servicemonitors 2>/dev/null || true
+          echo "Monitoring deployed — profile: $ENVIRONMENT, grafana image tag: $IMAGE_TAG"

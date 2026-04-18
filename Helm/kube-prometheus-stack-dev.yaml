@@ -1,14 +1,34 @@
 grafana:
+  image:
+    repository: iot-agent-grafana
+    tag: latest
   adminPassword: admin
   service:
     type: ClusterIP
   defaultDashboardsTimezone: Europe/Warsaw
+  persistence:
+    enabled: true
+    size: 1Gi
+  # Datasources managed here — image only bakes in dashboards
+  additionalDataSources:
+    - name: Loki
+      uid: loki
+      type: loki
+      access: proxy
+      url: http://iot-agent-loki.iotag-monitoring.svc.cluster.local:3100
+      editable: true
 
 prometheus:
   prometheusSpec:
     retention: 7d
     serviceMonitorSelectorNilUsesHelmValues: false
     serviceMonitorNamespaceSelector: {}
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          resources:
+            requests:
+              storage: 10Gi
 
 alertmanager:
   alertmanagerSpec:
