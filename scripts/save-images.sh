@@ -20,7 +20,6 @@ OUT_DIR="${1:-$REPO_DIR/monitoring-images}"
 
 mkdir -p "$OUT_DIR"
 
-# All upstream images used by kube-prometheus-stack + Loki + Promtail
 IMAGES=(
   "quay.io/prometheus/prometheus:v3.2.1"
   "quay.io/prometheus/alertmanager:v0.28.1"

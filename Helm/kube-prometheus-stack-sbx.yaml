@@ -63,6 +63,13 @@ grafana:
   adminPassword: admin
   service:
     type: ClusterIP
+  ingress:
+    enabled: true
+    ingressClassName: traefik
+    hosts:
+      - grafana-sbx.iotag-dev.com
+    paths:
+      - /
   defaultDashboardsTimezone: Europe/Warsaw
   persistence:
     enabled: true
