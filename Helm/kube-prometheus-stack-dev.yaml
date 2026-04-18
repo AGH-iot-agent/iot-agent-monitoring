@@ -9,7 +9,6 @@ grafana:
   persistence:
     enabled: true
     size: 1Gi
-  # Datasources managed here — image only bakes in dashboards
   additionalDataSources:
     - name: Loki
       uid: loki
