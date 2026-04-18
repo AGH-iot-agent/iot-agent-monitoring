@@ -61,6 +61,51 @@ jobs:
           fi
           echo "Imported $IMAGE into k3s"
 
+      - name: Pre-pull monitoring images into k3s
+        run: |
+          set -euo pipefail
+          SUDO=""
+          command -v sudo >/dev/null && SUDO="sudo"
+          K3S_SOCK="/run/k3s/containerd/containerd.sock"
+
+          # Core images used by kube-prometheus-stack, Loki, Promtail
+          IMAGES=(
+            "quay.io/prometheus/prometheus:v3.2.1"
+            "quay.io/prometheus/alertmanager:v0.28.1"
+            "quay.io/prometheus-operator/prometheus-operator:v0.82.0"
+            "quay.io/prometheus-operator/prometheus-config-reloader:v0.82.0"
+            "quay.io/kiwigrid/k8s-sidecar:1.30.3"
+            "quay.io/prometheus/node-exporter:v1.9.0"
+            "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.15.0"
+          )
+
+          import_image() {
+            local img="$1"
+            local name; name="$(echo "$img" | tr '/:' '__')"
+            local archive="$IMAGE_OUTPUT_DIR/monitoring-cache/${name}.tar"
+
+            # Skip if already present in k3s containerd
+            if $SUDO ctr --address "$K3S_SOCK" -n k8s.io images check "name==$img" 2>/dev/null | grep -q "$img"; then
+              echo "Already in k3s: $img"
+              return 0
+            fi
+
+            mkdir -p "$IMAGE_OUTPUT_DIR/monitoring-cache"
+            if [[ ! -f "$archive" ]]; then
+              echo "Pulling $img ..."
+              docker pull "$img"
+              docker save -o "$archive" "$img"
+            fi
+            echo "Importing $img into k3s ..."
+            $SUDO ctr --address "$K3S_SOCK" -n k8s.io images import "$archive"
+          }
+
+          for img in "${IMAGES[@]}"; do
+            import_image "$img" &
+          done
+          wait
+          echo "All monitoring images cached and imported"
+
   deploy-monitoring:
     runs-on: [self-hosted, iot-agent-local]
     needs: build-grafana
@@ -88,35 +133,65 @@ jobs:
           [[ -f "$PROMTAIL_VALUES" ]]  || { echo "ERROR: Missing values file $PROMTAIL_VALUES"; exit 1; }
           kubectl version --client && helm version
 
-      - name: Add Helm repositories
+      - name: Add Helm repositories & cache charts
         run: |
+          set -euo pipefail
+          CHART_CACHE="/mnt/storage/iot-agent/helm-charts/monitoring-cache"
+          mkdir -p "$CHART_CACHE"
+
           helm repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null 2>&1 || true
           helm repo add grafana https://grafana.github.io/helm-charts >/dev/null 2>&1 || true
           helm repo update >/dev/null
 
+          # Cache charts locally — only re-download when a new version exists
+          for chart in prometheus-community/kube-prometheus-stack grafana/loki grafana/promtail; do
+            CHART_NAME="${chart##*/}"
+            LATEST_VER="$(helm search repo "$chart" --output json | jq -r '.[0].version')"
+            CACHED="${CHART_CACHE}/${CHART_NAME}-${LATEST_VER}.tgz"
+            if [[ ! -f "$CACHED" ]]; then
+              echo "Downloading $chart $LATEST_VER ..."
+              helm pull "$chart" --version "$LATEST_VER" --destination "$CHART_CACHE"
+            else
+              echo "Using cached $CACHED"
+            fi
+          done
+
+          echo "CHART_CACHE=$CHART_CACHE" >> "$GITHUB_ENV"
+
       - name: Deploy kube-prometheus-stack (with custom Grafana image)
         run: |
           set -euo pipefail
-          helm upgrade --install iot-agent-monitoring prometheus-community/kube-prometheus-stack \
+          KPS_CHART="$(find "$CHART_CACHE" -name 'kube-prometheus-stack-*.tgz' | sort -V | tail -1)"
+          [[ -f "$KPS_CHART" ]] || { echo "ERROR: cached kube-prometheus-stack chart not found"; exit 1; }
+
+          helm upgrade --install iot-agent-monitoring "$KPS_CHART" \
             --namespace "$MONITORING_NAMESPACE" \
             --create-namespace \
             -f "$KPS_VALUES" \
             --set grafana.image.tag="$IMAGE_TAG" \
-            --wait --timeout 20m
+            --wait --timeout 10m
 
       - name: Deploy Loki
         run: |
-          helm upgrade --install iot-agent-loki grafana/loki \
+          set -euo pipefail
+          LOKI_CHART="$(find "$CHART_CACHE" -name 'loki-*.tgz' | sort -V | tail -1)"
+          [[ -f "$LOKI_CHART" ]] || { echo "ERROR: cached loki chart not found"; exit 1; }
+
+          helm upgrade --install iot-agent-loki "$LOKI_CHART" \
             --namespace "$MONITORING_NAMESPACE" \
             -f "$LOKI_VALUES" \
-            --wait --timeout 20m
+            --wait --timeout 10m
 
       - name: Deploy Promtail
         run: |
-          helm upgrade --install iot-agent-promtail grafana/promtail \
+          set -euo pipefail
+          PROMTAIL_CHART="$(find "$CHART_CACHE" -name 'promtail-*.tgz' | sort -V | tail -1)"
+          [[ -f "$PROMTAIL_CHART" ]] || { echo "ERROR: cached promtail chart not found"; exit 1; }
+
+          helm upgrade --install iot-agent-promtail "$PROMTAIL_CHART" \
             --namespace "$MONITORING_NAMESPACE" \
             -f "$PROMTAIL_VALUES" \
-            --wait --timeout 20m
+            --wait --timeout 10m
 
       - name: Apply ServiceMonitors
         run: |
