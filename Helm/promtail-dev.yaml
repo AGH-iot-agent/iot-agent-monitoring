@@ -6,7 +6,7 @@ image:
 
 config:
   clients:
-    - url: http://iot-agent-loki-gateway.iotag-monitoring.svc.cluster.local/loki/api/v1/push
+    - url: http://iot-agent-loki.iotag-monitoring.svc.cluster.local:3100/loki/api/v1/push
   snippets:
     scrapeConfigs: |
       - job_name: kubernetes-pods
@@ -21,6 +21,12 @@ config:
           - action: drop
             source_labels: [__meta_kubernetes_pod_container_init]
             regex: true
+          # map pod label "app" → Loki label "app" (set by Helm chart labelsEnableDefault)
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            target_label: app
+          # use app as Loki service_name so services appear by name, not "unknown service"
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            target_label: service_name
           - source_labels: [__meta_kubernetes_pod_container_name]
             target_label: container
           - source_labels: [__meta_kubernetes_pod_name]
