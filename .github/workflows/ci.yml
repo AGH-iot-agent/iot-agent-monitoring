@@ -17,7 +17,7 @@ env:
 
 jobs:
   build-grafana:
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, iot-agent-local]
     outputs:
       image_tag: ${{ steps.tag.outputs.value }}
     steps:
@@ -62,7 +62,7 @@ jobs:
           echo "Imported $IMAGE into k3s"
 
   deploy-monitoring:
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, iot-agent-local]
     needs: build-grafana
     env:
       MONITORING_NAMESPACE: iotag-monitoring

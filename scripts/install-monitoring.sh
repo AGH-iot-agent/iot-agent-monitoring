@@ -40,8 +40,8 @@ helm upgrade --install iot-agent-promtail grafana/promtail \
   -f "$PROMTAIL_VALUES" \
   --wait --timeout 20m
 
-kubectl apply -f k8s/servicemonitors/iot-platform-dev.yaml
-kubectl apply -f k8s/servicemonitors/iot-platform-sbx.yaml
+SM_FILE="k8s/servicemonitors/iot-platform-${ENVIRONMENT}.yaml"
+[[ -f "$SM_FILE" ]] && kubectl apply -f "$SM_FILE" || echo "WARN: $SM_FILE not found, skipping"
 
 echo "Monitoring installed for environment profile: $ENVIRONMENT"
 echo "Namespace: $MON_NS"

@@ -2,6 +2,7 @@ grafana:
   image:
     repository: iot-agent-grafana
     tag: latest
+    pullPolicy: Never
   adminPassword: admin
   service:
     type: ClusterIP
