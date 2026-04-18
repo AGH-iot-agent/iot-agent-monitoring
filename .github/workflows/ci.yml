@@ -17,7 +17,7 @@ env:
 
 jobs:
   build-grafana:
-    runs-on: [self-hosted, iot-agent-local]
+    runs-on: [self-hosted]
     outputs:
       image_tag: ${{ steps.tag.outputs.value }}
     steps:
@@ -45,13 +45,16 @@ jobs:
           ARCHIVE="$ARCHIVE_DIR/iot-agent-grafana__${{ steps.tag.outputs.value }}.tar"
           docker save -o "$ARCHIVE" "$IMAGE" iot-agent-grafana:latest
 
+          SUDO=""
+          command -v sudo >/dev/null && SUDO="sudo"
+
           K3S_SOCK="/run/k3s/containerd/containerd.sock"
           [[ -S "$K3S_SOCK" ]] || { echo "ERROR: k3s containerd socket not found"; exit 1; }
-          sudo k3s ctr images import "$ARCHIVE"
+          $SUDO k3s ctr images import "$ARCHIVE"
           echo "Imported $IMAGE into k3s"
 
   deploy-monitoring:
-    runs-on: [self-hosted, iot-agent-local]
+    runs-on: [self-hosted]
     needs: build-grafana
     env:
       MONITORING_NAMESPACE: iotag-monitoring
