@@ -18,9 +18,17 @@ config:
         pipeline_stages:
           - cri: {}
         relabel_configs:
+          - action: drop
+            source_labels: [__meta_kubernetes_pod_container_init]
+            regex: true
           - source_labels: [__meta_kubernetes_pod_container_name]
             target_label: container
           - source_labels: [__meta_kubernetes_pod_name]
             target_label: pod
           - source_labels: [__meta_kubernetes_namespace]
             target_label: namespace
+          - action: replace
+            separator: /
+            source_labels: [__meta_kubernetes_pod_uid, __meta_kubernetes_pod_container_name]
+            replacement: /var/log/pods/*$1/*.log
+            target_label: __path__
