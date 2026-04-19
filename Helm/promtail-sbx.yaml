@@ -16,6 +16,6 @@ config:
         source_labels: [__meta_kubernetes_pod_container_init]
         regex: true
       - action: replace
-        source_labels: [__meta_kubernetes_pod_label_service_name, app]
+        source_labels: [__meta_kubernetes_pod_annotation_iotag_service, __meta_kubernetes_pod_annotation_service_name, app]
         regex: ^([^;]+).*$
         target_label: service_name
