@@ -237,3 +237,5 @@ jobs:
           kubectl -n "$MONITORING_NAMESPACE" get pods
           kubectl -n "$MONITORING_NAMESPACE" get servicemonitors 2>/dev/null || true
           echo "Monitoring deployed — profile: $ENVIRONMENT, grafana image tag: $IMAGE_TAG"
+
+          
