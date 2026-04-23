@@ -60,7 +60,7 @@ grafana:
         memory: 128Mi
   adminPassword: admin
   service:
-    type: ClusterIP
+    type: NodePort
   ingress:
     enabled: true
     ingressClassName: istio
