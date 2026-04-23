@@ -63,7 +63,7 @@ grafana:
     type: ClusterIP
   ingress:
     enabled: true
-    ingressClassName: traefik
+    ingressClassName: istio
     hosts:
       - grafana-dev.iotag-dev.com
     paths:

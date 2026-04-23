@@ -1,4 +1,3 @@
-# -- k3s does not expose these control-plane components; skip scraping
 kubeEtcd:
   enabled: false
 kubeScheduler:
@@ -8,7 +7,6 @@ kubeControllerManager:
 kubeProxy:
   enabled: false
 
-# -- All images pre-pulled into k3s containerd; never pull from internet
 global:
   imageRegistry: ""
 
@@ -65,7 +63,7 @@ grafana:
     type: ClusterIP
   ingress:
     enabled: true
-    ingressClassName: traefik
+    ingressClassName: istio
     hosts:
       - grafana-sbx.iotag-dev.com
     paths:
