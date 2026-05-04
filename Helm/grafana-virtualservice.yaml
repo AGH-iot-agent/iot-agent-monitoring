@@ -1,0 +1,19 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: grafana
+  namespace: iotag-monitoring
+spec:
+  hosts:
+    - grafana-dev.iotag-dev.com
+  gateways:
+    - istio-system/iotag-gateway
+  http:
+    - match:
+        - uri:
+            prefix: /
+      route:
+        - destination:
+            host: iot-agent-monitoring-grafana
+            port:
+              number: 80

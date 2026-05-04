@@ -1,0 +1,21 @@
+image:
+  registry: docker.io
+  repository: grafana/promtail
+  tag: 3.4.2
+  pullPolicy: IfNotPresent
+
+config:
+  clients:
+    - url: http://iot-agent-loki.iotag-monitoring.svc.cluster.local:3100/loki/api/v1/push
+  snippets:
+    extraRelabelConfigs:
+      - action: keep
+        source_labels: [__meta_kubernetes_namespace]
+        regex: iotag-sbx
+      - action: drop
+        source_labels: [__meta_kubernetes_pod_container_init]
+        regex: true
+      - action: replace
+        source_labels: [__meta_kubernetes_pod_annotation_iotag_service, __meta_kubernetes_pod_annotation_service_name, app]
+        regex: ^([^;]+).*$
+        target_label: service_name

@@ -1,0 +1,22 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - iot-agent-prometheus:9090
+
+  - job_name: iot-agent-services
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets:
+          - iot-agent-gateway-api:8080
+          - iot-agent-stream-worker:8080
+          - iot-agent-device-api:8080
+          - iot-agent-alert-api:8080
+          - iot-agent-logs:8080
+          - iot-agent-dashboard-api:8080
+          - iot-agent-sim-devices:8080
+          - iot-agent-authentication:8089

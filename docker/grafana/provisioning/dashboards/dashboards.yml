@@ -1,0 +1,12 @@
+apiVersion: 1
+
+providers:
+  - name: IoT Agent Dashboards
+    orgId: 1
+    folder: IoT Agent
+    type: file
+    disableDeletion: false
+    allowUiUpdates: true
+    updateIntervalSeconds: 15
+    options:
+      path: /var/lib/grafana/dashboards

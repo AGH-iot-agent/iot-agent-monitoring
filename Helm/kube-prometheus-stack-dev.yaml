@@ -1,0 +1,138 @@
+kubeEtcd:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+global:
+  imageRegistry: ""
+
+prometheusOperator:
+  image:
+    registry: quay.io
+    repository: prometheus-operator/prometheus-operator
+    tag: v0.82.0
+    pullPolicy: IfNotPresent
+  admissionWebhooks:
+    enabled: false
+  prometheusConfigReloader:
+    image:
+      registry: quay.io
+      repository: prometheus-operator/prometheus-config-reloader
+      tag: v0.82.0
+      pullPolicy: IfNotPresent
+
+grafana:
+  image:
+    repository: iot-agent-grafana
+    tag: latest
+    pullPolicy: Never
+  deploymentStrategy:
+    type: Recreate
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  readinessProbe:
+    initialDelaySeconds: 60
+    timeoutSeconds: 10
+    periodSeconds: 30
+  livenessProbe:
+    initialDelaySeconds: 120
+    timeoutSeconds: 10
+    periodSeconds: 30
+  sidecar:
+    image:
+      registry: quay.io
+      repository: kiwigrid/k8s-sidecar
+      tag: 1.30.3
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        memory: 128Mi
+  adminPassword: admin
+  service:
+    type: NodePort
+  ingress:
+    enabled: true
+    ingressClassName: istio
+    hosts:
+      - grafana-dev.iotag-dev.com
+    paths:
+      - /
+  defaultDashboardsTimezone: Europe/Warsaw
+  persistence:
+    enabled: true
+    size: 1Gi
+  additionalDataSources:
+    - name: Loki
+      uid: loki
+      type: loki
+      access: proxy
+      url: http://iot-agent-loki.iotag-monitoring.svc.cluster.local:3100
+      editable: true
+
+prometheus:
+  prometheusSpec:
+    image:
+      registry: quay.io
+      repository: prometheus/prometheus
+      tag: v3.2.1
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 50m
+        memory: 256Mi
+      limits:
+        memory: 1Gi
+    retention: 7d
+    serviceMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorNamespaceSelector: {}
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          resources:
+            requests:
+              storage: 10Gi
+
+alertmanager:
+  alertmanagerSpec:
+    image:
+      registry: quay.io
+      repository: prometheus/alertmanager
+      tag: v0.28.1
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        memory: 256Mi
+    storage:
+      volumeClaimTemplate:
+        spec:
+          resources:
+            requests:
+              storage: 2Gi
+
+prometheus-node-exporter:
+  image:
+    registry: quay.io
+    repository: prometheus/node-exporter
+    tag: v1.9.0
+    pullPolicy: IfNotPresent
+
+kube-state-metrics:
+  image:
+    registry: registry.k8s.io
+    repository: kube-state-metrics/kube-state-metrics
+    tag: v2.15.0
+    pullPolicy: IfNotPresent

@@ -1,0 +1,241 @@
+name: CI
+
+on:
+  push:
+    branches: [main, feat/iot-agent-monitoring]
+  pull_request:
+    branches: [main, feat/iot-agent-monitoring]
+  workflow_dispatch:
+
+concurrency:
+  group: iot-agent-monitoring-${{ github.event_name == 'pull_request' && 'sbx' || 'dev' }}
+  cancel-in-progress: false
+
+env:
+  KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  IMAGE_OUTPUT_DIR: /mnt/storage/iot-agent/docker-local
+
+jobs:
+  build-grafana:
+    runs-on: [self-hosted, iot-agent-local]
+    outputs:
+      image_tag: ${{ steps.tag.outputs.value }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve image tag
+        id: tag
+        run: echo "value=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Grafana image
+        run: |
+          set -euo pipefail
+          IMAGE="iot-agent-grafana:${{ steps.tag.outputs.value }}"
+          docker build -f Dockerfile -t "$IMAGE" .
+          # also tag as latest for convenience
+          docker tag "$IMAGE" iot-agent-grafana:latest
+
+      - name: Save & import to k3s
+        run: |
+          set -euo pipefail
+          IMAGE="iot-agent-grafana:${{ steps.tag.outputs.value }}"
+          ARCHIVE_DIR="$IMAGE_OUTPUT_DIR/iot-agent-grafana"
+          mkdir -p "$ARCHIVE_DIR"
+          ARCHIVE="$ARCHIVE_DIR/iot-agent-grafana__${{ steps.tag.outputs.value }}.tar"
+          docker save -o "$ARCHIVE" "$IMAGE" iot-agent-grafana:latest
+
+          SUDO=""
+          command -v sudo >/dev/null && SUDO="sudo"
+
+          K3S_SOCK="/run/k3s/containerd/containerd.sock"
+          [[ -S "$K3S_SOCK" ]] || { echo "ERROR: k3s containerd socket not found — mount /run/k3s from the k3s host"; exit 1; }
+
+          if command -v ctr >/dev/null 2>&1; then
+            $SUDO "$(command -v ctr)" --address "$K3S_SOCK" -n k8s.io images import "$ARCHIVE"
+          elif command -v k3s >/dev/null 2>&1; then
+            $SUDO "$(command -v k3s)" ctr images import "$ARCHIVE"
+          else
+            echo "ERROR: Neither ctr nor k3s found in PATH"
+            exit 1
+          fi
+          echo "Imported $IMAGE into k3s"
+
+      - name: Pre-pull monitoring images into k3s
+        run: |
+          set -euo pipefail
+          CACHE_DIR="$IMAGE_OUTPUT_DIR/monitoring-cache"
+          mkdir -p "$CACHE_DIR"
+
+          K3S_SOCK="/run/k3s/containerd/containerd.sock"
+          SUDO=""
+          command -v sudo >/dev/null && SUDO="sudo"
+
+          import_to_k3s() {
+            local archive="$1"
+            if command -v k3s >/dev/null; then
+              $SUDO "$(command -v k3s)" ctr images import "$archive"
+            elif command -v ctr >/dev/null; then
+              $SUDO "$(command -v ctr)" --address "$K3S_SOCK" -n k8s.io images import "$archive"
+            elif [[ -x /usr/local/bin/k3s ]]; then
+              $SUDO /usr/local/bin/k3s ctr images import "$archive"
+            else
+              echo "ERROR: Neither k3s nor ctr found"; exit 1
+            fi
+          }
+
+          # All images required by kube-prometheus-stack + Loki + Promtail
+          IMAGES=(
+            "quay.io/prometheus/prometheus:v3.2.1"
+            "quay.io/prometheus/alertmanager:v0.28.1"
+            "quay.io/prometheus-operator/prometheus-operator:v0.82.0"
+            "quay.io/prometheus-operator/prometheus-config-reloader:v0.82.0"
+            "quay.io/kiwigrid/k8s-sidecar:1.30.3"
+            "quay.io/prometheus/node-exporter:v1.9.0"
+            "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.15.0"
+            "docker.io/grafana/loki:3.4.2"
+            "docker.io/grafana/promtail:3.4.2"
+          )
+
+          for img in "${IMAGES[@]}"; do
+            ARCHIVE="${CACHE_DIR}/$(echo "$img" | tr '/:' '__').tar"
+
+            if [[ -f "$ARCHIVE" ]]; then
+              echo "Cached: $img"
+            else
+              echo "Pulling $img ..."
+              docker pull "$img"
+              docker save -o "$ARCHIVE" "$img"
+            fi
+
+            echo "Importing $img ..."
+            import_to_k3s "$ARCHIVE"
+          done
+          echo "All monitoring images cached and imported"
+
+  deploy-monitoring:
+    runs-on: [self-hosted, iot-agent-local]
+    needs: build-grafana
+    env:
+      MONITORING_NAMESPACE: iotag-monitoring
+      ENVIRONMENT:      ${{ github.event_name == 'pull_request' && 'sbx' || 'dev' }}
+      KPS_VALUES:       ${{ github.event_name == 'pull_request' && 'Helm/kube-prometheus-stack-sbx.yaml' || 'Helm/kube-prometheus-stack-dev.yaml' }}
+      LOKI_VALUES:      ${{ github.event_name == 'pull_request' && 'Helm/loki-sbx.yaml' || 'Helm/loki-dev.yaml' }}
+      PROMTAIL_VALUES:  ${{ github.event_name == 'pull_request' && 'Helm/promtail-sbx.yaml' || 'Helm/promtail-dev.yaml' }}
+      IMAGE_TAG:        ${{ needs.build-grafana.outputs.image_tag }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Verify runner prerequisites
+        run: |
+          set -euo pipefail
+          [[ -f "$KUBECONFIG" ]]       || { echo "ERROR: Missing kubeconfig at $KUBECONFIG"; exit 1; }
+          [[ -f "$KPS_VALUES" ]]       || { echo "ERROR: Missing values file $KPS_VALUES"; exit 1; }
+          [[ -f "$LOKI_VALUES" ]]      || { echo "ERROR: Missing values file $LOKI_VALUES"; exit 1; }
+          [[ -f "$PROMTAIL_VALUES" ]]  || { echo "ERROR: Missing values file $PROMTAIL_VALUES"; exit 1; }
+          kubectl version --client && helm version
+
+      - name: Add Helm repositories & cache charts
+        run: |
+          set -euo pipefail
+          CHART_CACHE="/mnt/storage/iot-agent/helm-charts/monitoring-cache"
+          mkdir -p "$CHART_CACHE"
+
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null 2>&1 || true
+          helm repo add grafana https://grafana.github.io/helm-charts >/dev/null 2>&1 || true
+          helm repo update >/dev/null
+
+          # Cache charts locally — only re-download when a new version exists
+          for chart in prometheus-community/kube-prometheus-stack grafana/loki grafana/promtail; do
+            CHART_NAME="${chart##*/}"
+            LATEST_VER="$(helm search repo "$chart" --output json | jq -r '.[0].version')"
+            CACHED="${CHART_CACHE}/${CHART_NAME}-${LATEST_VER}.tgz"
+            if [[ ! -f "$CACHED" ]]; then
+              echo "Downloading $chart $LATEST_VER ..."
+              helm pull "$chart" --version "$LATEST_VER" --destination "$CHART_CACHE"
+            else
+              echo "Using cached $CACHED"
+            fi
+          done
+
+          echo "CHART_CACHE=$CHART_CACHE" >> "$GITHUB_ENV"
+
+      - name: Recover stuck Helm releases
+        run: |
+          set -euo pipefail
+          for release in iot-agent-monitoring iot-agent-loki iot-agent-promtail; do
+            STATUS="$(helm status "$release" -n "$MONITORING_NAMESPACE" -o json 2>/dev/null | jq -r '.info.status' || echo "not-found")"
+            case "$STATUS" in
+              pending-install|pending-upgrade|pending-rollback)
+                echo "Release $release stuck in $STATUS — rolling back ..."
+                LAST_GOOD="$(helm history "$release" -n "$MONITORING_NAMESPACE" -o json | jq '[.[] | select(.status == "deployed")] | last | .revision // empty')"
+                if [[ -n "$LAST_GOOD" ]]; then
+                  helm rollback "$release" "$LAST_GOOD" -n "$MONITORING_NAMESPACE" --wait --timeout 5m
+                else
+                  echo "No deployed revision found — uninstalling $release"
+                  helm uninstall "$release" -n "$MONITORING_NAMESPACE" --wait || true
+                fi
+                ;;
+              not-found|deployed|uninstalled)
+                echo "Release $release: $STATUS (OK)"
+                ;;
+              failed)
+                echo "Release $release in failed state — will be overwritten by upgrade"
+                ;;
+            esac
+          done
+
+      - name: Deploy kube-prometheus-stack (with custom Grafana image)
+        run: |
+          set -euo pipefail
+          KPS_CHART="$(find "$CHART_CACHE" -name 'kube-prometheus-stack-*.tgz' | sort -V | tail -1)"
+          [[ -f "$KPS_CHART" ]] || { echo "ERROR: cached kube-prometheus-stack chart not found"; exit 1; }
+
+          helm upgrade --install iot-agent-monitoring "$KPS_CHART" \
+            --namespace "$MONITORING_NAMESPACE" \
+            --create-namespace \
+            -f "$KPS_VALUES" \
+            --set grafana.image.tag="$IMAGE_TAG" \
+            --wait --timeout 20m
+
+      - name: Deploy Loki
+        run: |
+          set -euo pipefail
+          LOKI_CHART="$(find "$CHART_CACHE" -name 'loki-*.tgz' | sort -V | tail -1)"
+          [[ -f "$LOKI_CHART" ]] || { echo "ERROR: cached loki chart not found"; exit 1; }
+
+          helm upgrade --install iot-agent-loki "$LOKI_CHART" \
+            --namespace "$MONITORING_NAMESPACE" \
+            -f "$LOKI_VALUES" \
+            --wait --timeout 20m
+
+      - name: Deploy Promtail
+        run: |
+          set -euo pipefail
+          PROMTAIL_CHART="$(find "$CHART_CACHE" -name 'promtail-*.tgz' | sort -V | tail -1)"
+          [[ -f "$PROMTAIL_CHART" ]] || { echo "ERROR: cached promtail chart not found"; exit 1; }
+
+          helm upgrade --install iot-agent-promtail "$PROMTAIL_CHART" \
+            --namespace "$MONITORING_NAMESPACE" \
+            -f "$PROMTAIL_VALUES" \
+            --wait --timeout 20m
+
+      - name: Apply ServiceMonitors
+        run: |
+          set -euo pipefail
+          SM_FILE="k8s/servicemonitors/iot-platform-${ENVIRONMENT}.yaml"
+          [[ -f "$SM_FILE" ]] && kubectl apply -f "$SM_FILE" || echo "WARN: $SM_FILE not found, skipping"
+
+      - name: Verify deployment
+        if: always()
+        run: |
+          kubectl -n "$MONITORING_NAMESPACE" get pods
+          kubectl -n "$MONITORING_NAMESPACE" get servicemonitors 2>/dev/null || true
+          echo "Monitoring deployed — profile: $ENVIRONMENT, grafana image tag: $IMAGE_TAG"
+
+          
